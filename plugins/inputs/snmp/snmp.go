@@ -383,6 +383,27 @@ func (s *Snmp) gatherTable(acc telegraf.Accumulator, gs snmpConnection, t Table,
 	return nil
 }
 
+func checkErrors(oid string, ent gosnmp.SnmpPDU) error {
+	name := strings.TrimLeft(ent.Name, ".")
+	if strings.HasPrefix(oid, name) {
+		return nil
+	}
+	switch name {
+	case "1.3.6.1.6.3.15.1.1.1.0":
+		return fmt.Errorf("SNMP: Unsupported security level. OID: %s", name)
+	case "1.3.6.1.6.3.15.1.1.3.0":
+		return fmt.Errorf("SNMP: Unknown user name. OID: %s", name)
+	case "1.3.6.1.6.3.15.1.1.4.0":
+		return fmt.Errorf("SNMP: Unknown Engine ID. OID: %s", name)
+	case "1.3.6.1.6.3.15.1.1.5.0":
+		return fmt.Errorf("SNMP: Wrong digest. OID: %s", name)
+	case "1.3.6.1.6.3.15.1.1.6.0":
+		return fmt.Errorf("SNMP: Decryption error. OID: %s", name)
+	default:
+		return fmt.Errorf("SNMP: Unknown error. OID: %s", name)
+	}
+}
+
 // Build retrieves all the fields specified in the table and constructs the RTable.
 func (t Table) Build(gs snmpConnection, walk bool) (*RTable, error) {
 	rows := map[string]RTableRow{}
@@ -417,6 +438,9 @@ func (t Table) Build(gs snmpConnection, walk bool) (*RTable, error) {
 				return nil, fmt.Errorf("performing get on field %s: %w", f.Name, err)
 			} else if pkt != nil && len(pkt.Variables) > 0 && pkt.Variables[0].Type != gosnmp.NoSuchObject && pkt.Variables[0].Type != gosnmp.NoSuchInstance {
 				ent := pkt.Variables[0]
+				if err := checkErrors(oid, ent); err != nil {
+					return nil, err
+				}
 				fv, err := fieldConvert(f.Conversion, ent.Value)
 				if err != nil {
 					return nil, fmt.Errorf("converting %q (OID %s) for field %s: %w", ent.Value, ent.Name, f.Name, err)
@@ -425,6 +449,10 @@ func (t Table) Build(gs snmpConnection, walk bool) (*RTable, error) {
 			}
 		} else {
 			err := gs.Walk(oid, func(ent gosnmp.SnmpPDU) error {
+				err := checkErrors(oid, ent)
+				if err := checkErrors(oid, ent); err != nil {
+					return err
+				}
 				if len(ent.Name) <= len(oid) || ent.Name[:len(oid)+1] != oid+"." {
 					return &walkError{} // break the walk
 				}
